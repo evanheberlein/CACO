@@ -1,0 +1,664 @@
+# Select & filter GPS data from IntertialSense EVB-2
+plt.close()
+GPSpath = raw"C:\Users\evanh\Box\Cornell\CACO\2022\CACO_GPS"
+folders = readdir(GPSpath)
+GCPxyz_us = Any[]
+GCPlla_us = Any[]
+GCPxyz_fix_ds = Any[]
+fixpts = Any[]
+gcp6a = Any[]
+gcpo1a = Any[]
+GCPnames = Any[]
+j = 0
+pltdim = 1 # dimension to plot
+for (i,folder) in enumerate(folders)
+    fullfile = GPSpath * "\\" * folder
+    filename = readdir(Glob.glob"*POS.csv", fullfile)
+    if occursin("US_FOV1", fullfile) == true || occursin("_DS_", fullfile) == true # Not using FOV1, focused on US only
+        continue
+    end
+    GCP = CSV.read(filename, DataFrames.DataFrame)
+    pos = GCP[:,[9, 10, 11, 16]] # lla 1-3 + status (code 0x00000C00 = RTK_FIX according to pg. 138: https://docs.inertialsense.com/user-manual/reference/user_manual_pdf/InertialSenseDocs.pdf)
+    posfix = filter(row->any(occursin.("C", row.status[end-2:end-2])), pos) # from https://discourse.julialang.org/t/better-way-to-filter-strings-from-dataframe/88012
+    if length(posfix.status) == 0 # No RTK_FIX (filtered out)
+        posnf = pos
+        if occursin("FOV2_GCPo2", fullfile) == true # Filtering jump
+            deleteat!(posnf, 103:size(posnf,1))
+            replace!(posnf[!,"lla[0]"] .= maximum(posnf[!,"lla[0]"]))
+#             deleteat!(posnf, 1:140)
+#             deleteat!(posnf, 1:1165)
+#             dump(posnf[:,1])
+#             show(posnf[:,"lla[0]"])
+        end
+        if occursin("FOV2_GCP1", fullfile) == true # Acceleration filter
+            for k = 1:(size(posnf,1)-1)
+                k = k+1
+                if posnf[k-1,3] - posnf[k,3] > .5
+                    posnf[k,:] = posnf[k-1,:]
+                end
+            end
+#             deleteat!(posnf, 1660:2771)
+            replace!(posnf[!,"lla[1]"] .= Statistics.median(posnf[!,"lla[1]"]))
+        end
+        if occursin("FOV2_GCP3", fullfile) == true # Filtering
+            deleteat!(posnf, 2329:size(posnf,1))
+            replace!(posnf[!,"lla[1]"] .= maximum(posnf[!,"lla[1]"]))
+#             replace!(posnf[!,"lla[0]"] .= maximum(posnf[!,"lla[0]"]))
+        end
+        if occursin("FOV2_GCP5", fullfile) == true # Filtering
+            continue
+#             deleteat!(posnf, 2323:size(posnf,1))
+#             deleteat!(posnf, 1:745)
+#             deleteat!(posnf, 2324:size(posnf,1))
+#             deleteat!(posnf, 1:2321)
+#             replace!(posnf[!,"lla[0]"] .= Statistics.mean(posnf[!,"lla[0]"][250:350]))
+            replace!(posnf[!,"lla[1]"] .= minimum(posnf[!,"lla[1]"]))
+        end
+#         dump(last(fullfile, 8))
+        plt.plot(posnf[:,pltdim], label = last(fullfile, 8))
+        pos = posnf
+    else
+        push!(fixpts, length(posfix.status), last(fullfile, 9))
+        if occursin("DS_GCPb6", fullfile) == true # Filtering jump
+#             deleteat!(posfix, 56:140)
+        end
+        if occursin("DS_GCPb3", fullfile) == true # Filtering jump - roughly half high and half low (average?)
+            deleteat!(posfix, 227:249)
+        end
+        if occursin("DS_GCPo2", fullfile)
+            continue
+        end
+        j = j+1
+        pos = posfix
+        plt.plot(posfix[:,pltdim], label = last(fullfile, 8))
+    end
+#     # visualize spread before taking mean, or look at SDs
+    avgLLA = Statistics.mean.(eachcol(pos[:,1:3]))
+#     plt.scatter(x = avgLLA[2], y = avgLLA[1], label = last(fullfile, 8))#, label = last(fullfile, 8))
+#     if occursin("FOV2_GCP6", fullfile) == true
+#         push!(gcp6a, avgLLA[3]) # save elevation for US GCP (on deck) to guess US camera elevation
+#     end
+#     if occursin("DS_GCP", fullfile) == true
+#         push!(gcpo1a, avgLLA[3]) # save elevation for DS GCP (lowest bolt) to guess DS camera elevation
+#     end
+    GCP_LLA = Geodesy.LLA(avgLLA[1], avgLLA[2], avgLLA[3])
+#     dump(filename)
+#     dump(GCP_LLA)
+    GCP_UTM = Geodesy.UTMZ(GCP_LLA, Geodesy.wgs84) # Inertialsense uses WGS84 - see manual link above
+#     if occursin("US_FOV2", fullfile) == true
+    push!(GCPxyz_us, GCP_UTM)
+    push!(GCPlla_us, GCP_LLA)
+#     elseif occursin("_DS_", fullfile) == true 
+#         push!(GCPxyz_fix_ds, GCP_UTM)
+#     else continue
+#     end
+    push!(GCPnames, last(fullfile, 9))
+    dump(last(fullfile, 9))
+    dump(GCP_LLA)
+end
+plt.legend()
+# dump(GCPxyz_us)
+# GCPnames
+# fixpts
+# DS GCPs b7 & b6 are over 1m apart in elevation on figure, actually only 2.5 in apart on fence??
+# US GCP 4 over 2m higher than all others??
+
+################################################################################################
+# Thermistor data 
+thermpath = raw"C:\Users\evanh\Box\Cornell\CACO\2022\Thermistor\P6_CACO_July_2022.txt"
+therm = CSV.read(thermpath, delim = ',', skipto = 48, DataFrames.DataFrame)
+thermP = therm[:,2]
+plt.plot(thermP)
+# 360 lines per hour, 8640 lines per day
+us_therm_z = (sqrt(9^2-2^2) + 1/3 + 7) * ft_to_m
+ds_therm_z = 209/12*ft_to_m
+# therm[9230,:] - thermistor started @ 6:30 on 7/13, moved downstream @ 8:12 am on 7/14
+thermZ = us_therm_z.-thermP[1:9230]
+thermZ = append!(thermZ, ds_therm_z.-thermP[9231:end])
+
+plt.close("all")
+thermT = string.(therm[:,4])
+plt.plot(thermT[6302:6302+8638], thermP[6302:6302+8638])
+plt.xticks(1:1200:length(thermZ[6302:6302+8638])#, rotation = 45
+)
+plt.xlabel("Time - July 14, 2022")
+plt.ylabel("Thermistor pressure head (m)")
+plt.rc("font",size=24)
+
+# thermZf = open("therm_z_us.txt","w")
+# show(thermZf, thermP[871:9230]) 
+# close(thermZf)
+# thermZread = open("therm_us_readme.txt", "w")
+# write(thermZread, "Vertical distance of water surface to camera (m) from 8:55:00 on 7/13/22 to 8:08:10 on 7/14/22; \n")
+# write(thermZread, "Adjusted by vertical offset from camera to thermistor (4.91m) with thermistor head subtracted; \n")
+# write(thermZread, "Adjusted by vertical offset from camera to thermistor (4.91m) with thermistor head subtracted; \n")
+# write(thermZread, "Indices corresponding to provided .ATS files: \n")
+# write(thermZread, "003349: [6621:6660] \n")
+# write(thermZread, "003359: [6988:7008] \n")
+# write(thermZread, "003368: [7354:7374] \n")
+# write(thermZread, "003377: [7708:7728] \n")
+# write(thermZread, "003386: [8068:8088] \n")
+# close(thermZread)
+
+# plt.plot(thermZ[871:9230])
+plt.plot(thermP[871:9230])
+therm[8068+871:8088+871,:]
+# plt.plot(thermP[6621+871:8088+871])
+
+# therm[871,:] # 8:55 7/13 - therm in water US
+# therm[9230,:] # 8:08:10 7/14 - last in-water reading US
+# using Pkg
+# Pkg.activate(expanduser("~/.julia/dev/IRQIV/"))
+# include("CameraCalibrationHelpers.jl")
+# Pkg.activate(raw"C:\Users\evanh\.julia\dev\IRQIV.jl\examples\CameraCalibrationHelpers.jl") # path to IRQIV directory
+# TrueGCPxyz = [GCPxyz_us.x GCPxyz_us[all].y GCPzg_us[all]]
+GCPxyz_us[:].x
+
+################################################################################################
+# Board stuff
+# Finding GCPs in uv coordinates
+# upper left is 0,0 viewing original .ats files in ResearchIR
+us_bo1_uv = [475, 67]
+us_bo2_uv = [1034, 570]
+us_GCP1_uv = [279, 473]
+us_GCP2_uv = [164, 248]
+us_GCP3_uv = [45, 83]
+us_GCP4_uv = [14, 15]
+us_GCP5_uv = [235, 612]
+us_GCP6_uv = [40, 741]
+# Downstream - needs correction
+# ds_board_o1_uv = [350.2, 40.4]
+# ds_b1_uv = [725.0, 257.6]
+# ds_b2_uv = [719.9, 268.9]
+# ds_b3_uv = [694.3, 318.1]
+# ds_b5_uv = [667.6, 356.3]
+# ds_b6_uv = [731.3, 15.2]
+# ds_b7_uv = [726.5, 43.4]
+GCPuv_us = [us_bo1_uv, us_bo2_uv, us_GCP2_uv, us_GCP3_uv, us_GCP4_uv, us_GCP1_uv, #us_GCP5_uv, 
+    us_GCP6_uv]
+# GCPuv_fix_ds = [ds_board_o1_uv, ds_b7_uv, ds_b6_uv, ds_b3_uv]
+
+# Finding uv coords of board tape
+bo1_uv_us = [us_bo1_uv,
+[456,101],
+[437,136],
+[415,172],
+[395,208],
+[373,245],
+[352,283],
+[330,321],
+[306,360],
+[285,400]]
+bo2_uv_us = [us_bo2_uv,
+[976,603],
+[916,635],
+[858,668],
+[799,697],
+[743,728],
+[688,758],
+[634,784]]
+
+# Adding in board tape as additional GCPs 
+plt.close()
+tapeL = 0.5 * ft_to_m # tape distance is 6"
+bo1_ant_us = [GCPxyz_us[1].x, GCPxyz_us[1].y]
+bo1_ang_us = atan((504-275)/(433-38))+azimuth_us # atan(x/y) = degrees off of north + azimuth = estimate
+bo1_tape_us = fill(0.0, 10, 2) # 10 pieces of tape on board, x&y
+bo1_tape_us[1,:] = bo1_ant_us
+for i = 1:9
+    j = i+1
+    bo1_tape_us[j,1] = bo1_ant_us[1] - (sin(bo1_ang_us)*tapeL*i) # multiply by index: # of 6" increments
+    bo1_tape_us[j,2] = bo1_ant_us[2] - (cos(bo1_ang_us)*tapeL*i)
+end
+dump(bo1_tape_us)
+bo2_ant_us = [GCPxyz_us[2].x, GCPxyz_us[2].y]
+bo2_ang_us = atan((1107-667)/(781-535))+azimuth_us # atan(x/y) = degrees off of north + azimuth = estimate
+bo2_tape_us = fill(0.0, 8, 2) # Only 8 pieces of tape visible
+bo2_tape_us[1,:] = bo2_ant_us
+for i = 1:7
+    j = i+1
+    bo2_tape_us[j,1] = bo2_ant_us[1] - (sin(bo2_ang_us)*tapeL*i) # multiply by index: # of 6" increments
+    bo2_tape_us[j,2] = bo2_ant_us[2] - (cos(bo2_ang_us)*tapeL*i)
+end
+dump(bo2_tape_us)
+plt.scatter(bo1_tape_us[:,1], bo1_tape_us[:,2])
+plt.scatter(bo2_tape_us[:,1], bo2_tape_us[:,2])
+bo1_tape_us[:,2]
+sqrt((GCPxyz_us[2].x-GCPxyz_us[1].x)^2+(GCPxyz_us[2].y-GCPxyz_us[1].y)^2)
+
+###################################################################################################
+# Guesses of GCP elevation, with bridge deck as z=0:
+# Posts are 35" high off bridge deck based on photos from ME, 0.0254 m/in
+us_bo1_zg = [0] # Estimated on deck
+us_bo2_zg = [0] # "
+us_GCP1_zg = [(35-4)*0.0254] # Tape approx. 4" below top of fence
+us_GCP2_zg = [(17.5+6)*0.0254] # Top of first rung is 17.5" from deck, + 6" to center of 12" GCP
+us_GCP3_zg = [(17.5+6)*0.0254] # "
+us_GCP4_zg = [(35-4)*0.0254] # Tape approx. 4" below top of fence
+us_GCP5_zg = [0] # On deck
+us_GCP6_zg = [2*0.0254] # On wood cover ~2" above deck
+GCPzg_us = [us_bo1_zg, us_bo2_zg, us_GCP2_zg, us_GCP3_zg, us_GCP4_zg, us_GCP1_zg, #us_GCP5_zg, 
+us_GCP6_zg]
+
+
+
+    ###################################################################################################
+# View selected images of GCPs - hit enter in readline to advance figure
+plt.close()
+IMGpath = raw"/Users/evanheberlein/Library/CloudStorage/Box-Box/Cornell/CACO/2022/Analysis/GCP_photos"
+folders = readdir(IMGpath)
+for (i,folder) in enumerate(folders)
+    fullfile = IMGpath * "/" * folder
+    image = plt.imread(fullfile)
+#     dump(size(image))
+    plt.imshow(image; extent = [1,1344,784,1])
+    # plt.title(last(fullfile, 9))
+    # readline()
+end
+# DS board o2 out of frame
+
+# Upstream IRQIV averaging
+Pkg.activate(expanduser("~/.julia/dev/IRQIV/")) # path to IRQIV directory
+using IRQIV
+
+
+###############################################################################
+
+###############################################################################
+const M=64 # subwindow dims - horiz, N = vert.
+const N=64
+const rhoI = 40 # how far away to search (+/-) - i=horiz, j= vert
+const rhoJ = 40 # Set these to visual estimates - plot one pair
+MQD_parameters = (M=M, N=N, rhoI=rhoI, rhoJ=rhoJ)
+###############################################################################
+
+
+###############################################################################
+DtFrames = 1                    # Δt, frames (ATS 3116 is at 10Hz)
+data_output_rate_frames = 150    # difference between I1 sequence, frames - time sep of output
+nImagePairs = 20 # can set to inf - all frames in file
+# Can test on 10 pairs & look at histogram of displacements
+###############################################################################
+
+
+###############################################################################
+# Load IR images:
+I1inds = range(1, step=data_output_rate_frames, length=nImagePairs)
+I2inds = I1inds .+ DtFrames
+
+Nfiles = 37
+
+meanmagsus = fill(NaN, Nfiles)
+for f = 1:Nfiles
+    file = f+3348
+    FLIR_filename = joinpath(raw"D:\CNRD_IR", "Rec-DeFreesLab_-00" * string.(file) * ".ats")
+    ats_year = 2022
+    @assert isfile(FLIR_filename)
+    I1images = LoadATSImageSequence(FLIR_filename, I1inds, ats_year)
+    I2images = LoadATSImageSequence(FLIR_filename, I2inds, ats_year)
+
+    if any(isnuc(I1images.Headers)) || any(isnuc(I2images.Headers))
+        nuc_frames = isnuc(I1images.Headers) .| isnuc(I2images.Headers)
+        I1inds = I1inds[.!( isnuc(I1images.Headers) .| isnuc(I2images.Headers) )]
+        I2inds = I2inds[.!( isnuc(I1images.Headers) .| isnuc(I2images.Headers) )]
+        I1images = LoadATSImageSequence(FLIR_filename, I1inds, ats_year)
+        I2images = LoadATSImageSequence(FLIR_filename, I2inds, ats_year)
+    end
+
+    subwincorners = CartesianIndices(( (N+rhoI):N:(size(I1images,1)-(N+rhoI+1)), 
+                                    (M+rhoJ):M:(size(I1images,2)-(M+rhoJ+1)) ))
+
+    MQD_variables = initialize_MQD(I1images,
+                                   I2images,
+                                   subwincorners,
+                                   N, M,
+                                   rhoI, rhoJ)                              
+
+    subpix_shifts_i, subpix_shifts_j, performance_message = perform_MQD(
+        I1images, I2images, subwincorners, MQD_variables, MQD_parameters);
+    ###############################################################################
+    jmean = Statistics.mean(subpix_shifts_j[:,:,:], dims=3)
+    imean = Statistics.mean(subpix_shifts_i[:,:,:], dims=3)
+    jmean = dropdims(jmean, dims=3)
+    imean = dropdims(imean, dims=3)
+    meanmagsus[f] = Statistics.mean(hypot.(jmean, imean))
+
+    i = [ x[1] for x in Tuple.(subwincorners)]
+    j = [ x[2] for x in Tuple.(subwincorners)]
+    
+    plt.close("all")
+    fig,ax = plt.subplots()
+    im = ax.imshow(I1images[:,:,1], alpha=0.3, vmin=8700, vmax=11800)
+    q = ax.quiver(j,i, jmean, imean, angles="xy")
+    # ax.invert_yaxis()
+    
+    # Look at histogram of displacements
+    fig, ax = plt.subplots()
+    h1 = ax.hist(vec(subpix_shifts_i), 100, label="i", alpha=0.4);
+    h2 = ax.hist(vec(subpix_shifts_j), 100, label="j", alpha=0.4);
+    plt.legend()
+    plt.show()
+end
+
+
+# Creating custom subwindows US - look at shadow from first file after tide turns around (3349)
+us_shadow_start = [182,1] # [u,v]
+us_shadow_end = [764,784] # [u,v]
+us_shadow_ror = (us_shadow_end[2] - us_shadow_start[2])/(us_shadow_end[1] - us_shadow_start[1]) # rise over run - v/u ratio
+us_transect_start_u = us_shadow_start[1] + M + rhoJ
+
+us_transect_start_v = us_shadow_start[2] + N + rhoI # First point in vertical pixels - edge of image + search radius + subwindow size
+# us_transect_start_u = us_shadow_start[1] + round(us_transect_start_v/us_shadow_ror) + M + rhoJ # First pt in horizontal pixels - edge of shadow + 
+[us_transect_start_u, us_transect_start_v]
+us_transect_end_v = us_shadow_end[2] - N - rhoI
+
+# Select subwindows for quantification
+subwin_inds_vec = hcat(vec(getindex.(subwincorners,2)), vec(getindex.(subwincorners,1))) # [u, v]
+
+# Filter by row in v coordinate :
+subwin_v_coords = getindex.(subwincorners,1)[:,1] # vector of subwindow v pixel coordinates (vertical)
+subwin_u_coords = getindex.(subwincorners,2)[1,:] # vector of subwindow u pixel coordinates (horizontal)
+
+subwin_diag_u_inds = zeros(1:length(subwin_v_coords))
+subwin_diag_u_inds[1] = findfirst(subwin_u_coords .>= us_transect_start_u) # index in of first subwindow located >= from transect start at top of image
+
+ # find u coordinate for each subwindow along diagonal to have one subwindow in each row of v
+ subwin_diag_u = subwin_u_coords[Int(subwin_diag_u_inds[1])] # find starting u coordinate
+for i = 2:length(subwin_v_coords) # for every row in v 
+    subwin_diag_u = subwin_diag_u + N/us_shadow_ror # from previous u coordinate, go 
+    subwin_diag_u_inds[i] = findfirst(subwin_u_coords .>= subwin_diag_u)
+end
+
+subwin_diag_u_inds
+subwin_diag_v_inds = vec(1:length(subwin_v_coords))
+
+# Create mask to isolate indices of subwindows of interest
+subwin_mask = zeros(size(displacement_x_mean))
+replace!(subwin_mask, 0=>NaN)
+
+for u = 1:size(subwin_mask,2)
+    for v = 1:size(subwin_mask,1)
+        u_ind = subwin_diag_u_inds[v] # 15
+        v_ind = subwin_diag_v_inds[v]
+        if u == u_ind && v == v_ind # find subwindow indices in 2d arrays
+            subwin_mask[v,u] = 1
+        else
+        end
+    end
+end
+
+# Multiply all matrices by mask to isolate subwindows to be quantified
+j_masked = j .* subwin_mask
+i_masked = i .* subwin_mask
+jmean_masked = jmean .* subwin_mask
+imean_masked = imean .* subwin_mask
+displacement_x_mean_masked = displacement_x_mean .* subwin_mask
+displacement_y_mean_masked = displacement_y_mean .* subwin_mask
+centroid_x_origin_masked = centroid_x_origin .* subwin_mask
+centroid_y_origin_masked = centroid_y_origin .* subwin_mask
+
+# plt.close("all")
+# fig,axs = plt.subplots()
+# im = axs.imshow(I1images[:,:,1], alpha=0.3, vmin=8700, vmax=11800)
+# # q = axs.quiver(j,i, jmean, imean, angles="xy")
+# qm = axs.quiver(j_masked,i_masked, jmean_masked, imean_masked, angles="xy")
+# # swc = axs.scatter(subwin_inds_vec[:,1], subwin_inds_vec[:,2])
+# plt.show()
+# ax.invert_yaxis()
+
+# plt.close("all")
+# fig,axs = plt.subplots()
+# qm = axs.quiver(centroid_x_origin_masked, centroid_y_origin_masked, displacement_x_mean_masked, displacement_y_mean_masked, angles="xy")
+# S = axs.scatter(UTM_us_S[1], UTM_us_S[2])
+# No = axs.scatter(UTM_us_N[1], UTM_us_N[2])
+# cam = axs.scatter(χcalculated_us.x_c, χcalculated_us.y_c)
+# axs.invert_xaxis()
+# plt.show()
+
+# Create time vector from ATS file metadata
+dt_vec = (IRQIV.ats_ts(I2images) .- IRQIV.ats_ts(I1images)) # ats_ts = timestamp, should give consistent dt
+dt_vec = [Dates.value(x) for x in dt_vec]
+
+dt = mean(dt_vec) / 1000 # convert ms to s 
+
+gate_width = (97*2+89)/12*ft_to_m # m, 2 97' gates & 1 89" gate on us side
+mean_vel = NaNStatistics.nanmean(hypot.(displacement_x_mean_masked, displacement_y_mean_masked)) / dt # m/s 
+q_estimate = gate_width * mean_vel * thermP[therm_us_test_idx]
+
+# get u & v indices of subwindows we want to quantify - then extract from displacement/location matrices using both u & v indices
+
+
+
+# Downstream IRQIV test
+const M=64 # subwindow dims - horiz, N = vert.
+const N=64
+const rhoI = 40 # how far away to search (+/-) - i=horiz, j= vert
+const rhoJ = 40 # Set these to visual estimates - plot one pair
+MQD_parameters = (M=M, N=N, rhoI=rhoI, rhoJ=rhoJ)
+###############################################################################
+
+DtFrames = 1                    # Δt, frames (ATS 3116 is at 10Hz)
+data_output_rate_frames = 150    # difference between I1 sequence, frames - time sep of output
+nImagePairs = 20 # can set to inf - all frames in file
+# Can test on 10 pairs & look at histogram of displacements
+###############################################################################
+
+# Load IR images:
+I1inds = range(1, step=data_output_rate_frames, length=nImagePairs)
+I2inds = I1inds .+ DtFrames
+
+Nfiles = 20
+
+FLIR_filename = "/Volumes/OWC_NVMe_4TB/CNRD_IR/Rec-DeFreesLab_-003493.ats"
+ats_year = 2022
+@assert isfile(FLIR_filename)
+I1images = LoadATSImageSequence(FLIR_filename, I1inds, ats_year)
+I2images = LoadATSImageSequence(FLIR_filename, I2inds, ats_year)
+
+if any(isnuc(I1images.Headers)) || any(isnuc(I2images.Headers))
+    nuc_frames = isnuc(I1images.Headers) .| isnuc(I2images.Headers)
+    I1inds = I1inds[.!( isnuc(I1images.Headers) .| isnuc(I2images.Headers) )]
+    I2inds = I2inds[.!( isnuc(I1images.Headers) .| isnuc(I2images.Headers) )]
+    I1images = LoadATSImageSequence(FLIR_filename, I1inds, ats_year)
+    I2images = LoadATSImageSequence(FLIR_filename, I2inds, ats_year)
+end
+
+subwincorners = CartesianIndices(( (N+rhoI):N:(size(I1images,1)-(N+rhoI+1)),
+                                (M+rhoJ):M:(size(I1images,2)-(M+rhoJ+1)) ))
+
+MQD_variables = initialize_MQD(I1images,
+                                I2images,
+                                subwincorners,
+                                N, M,
+                                rhoI, rhoJ)                              
+
+subpix_shifts_i, subpix_shifts_j, performance_message = perform_MQD(I1images, I2images, subwincorners, MQD_variables);
+###############################################################################
+jmean = Statistics.mean(subpix_shifts_j[:,:,:], dims=3)
+imean = Statistics.mean(subpix_shifts_i[:,:,:], dims=3)
+jmean = dropdims(jmean, dims=3)
+imean = dropdims(imean, dims=3)
+
+i = [ x[1] for x in Tuple.(subwincorners)]
+j = [ x[2] for x in Tuple.(subwincorners)]
+
+
+
+plt.close("all")
+fig,ax = plt.subplots()
+im = ax.imshow(I1images[:,:,1], alpha=0.3, vmin=8700, vmax=11800)
+q = ax.quiver(j,i, jmean, imean, angles="xy")
+# ax.invert_yaxis()
+
+# Look at histogram of displacements
+# fig, ax = plt.subplots()
+# h1 = ax.hist(vec(subpix_shifts_i), 100, label="i", alpha=0.4);
+# h2 = ax.hist(vec(subpix_shifts_j), 100, label="j", alpha=0.4);
+# plt.legend()
+# plt.show()
+
+# Upstream IRQIV averaging COPY
+# Need to store: discharge estimate, time vector
+
+# Subwindow dimensions remain constant
+const M=80 # subwindow dims - horiz, N = vert.
+const N=80
+const rhoI = 80 # how far away to search (+/-) - i=short side, j= long side
+const rhoJ = 80 # Set these to visual estimates - plot one pair
+MQD_parameters = (M=M, N=N, rhoI=rhoI, rhoJ=rhoJ)
+
+# Set ATS parameters
+Img_dims = [784, 1344] # Image dims: 784 x 1344
+DtFrames = 1                    # Δt, frames (ATS 3116 is at 10Hz)
+data_output_rate_frames = 150    # difference between I1 sequence, frames - time sep of output
+nImagePairs = 20 # can set to inf - all frames in file
+Nfiles = 2#37 # Set number of files to average over
+
+# Load IR images:
+I1inds = range(1, step=data_output_rate_frames, length=nImagePairs)
+I2inds = I1inds .+ DtFrames
+
+# Original subwindow code:
+subwincorners = CartesianIndices(( (N+rhoI):N:(Img_dims[1]-(N+rhoI+1)), 
+                                    (M+rhoJ):M:(Img_dims[2]-(M+rhoJ+1))))
+# Restrict subwindows to only area around shadow/ROI (problematic bc search radius not incorporated): 
+# subwincorners = CartesianIndices(( (N+rhoI):N:(size(I1images,1)-(N+rhoI+1)), 
+#                                      (us_shadow_start[1]-M-rhoJ):M:(us_shadow_end[1]+(M+rhoJ+1))))
+# subwin_inds_grid = cat(getindex.(subwincorners,2), getindex.(subwincorners,1))
+
+###############################################################################################
+# Creating custom subwindows US - look at shadow from first file after tide turns around (3349)
+us_shadow_start = [182,1] # [u,v]
+us_shadow_end = [764,784] # [u,v]
+us_shadow_ror = (us_shadow_end[2] - us_shadow_start[2])/(us_shadow_end[1] - us_shadow_start[1]) # rise over run - v/u ratio
+us_transect_start_u = us_shadow_start[1] + M + rhoJ
+us_transect_start_v = us_shadow_start[2] + N + rhoI # First point in vertical pixels - edge of image + search radius + subwindow size
+# us_transect_start_u = us_shadow_start[1] + round(us_transect_start_v/us_shadow_ror) + M + rhoJ # First pt in horizontal pixels - edge of shadow + 
+[us_transect_start_u, us_transect_start_v]
+us_transect_end_v = us_shadow_end[2] - N - rhoI
+us_shadow_theta = atan(1/us_shadow_ror) # Find angle of shadow (from vertical)
+
+# Select subwindows for quantification
+subwin_inds_vec = hcat(vec(getindex.(subwincorners,2)), vec(getindex.(subwincorners,1))) # [u, v]
+
+# Filter by row in v coordinate :
+subwin_v_coords = getindex.(subwincorners,1)[:,1] # vector of subwindow v pixel coordinates (vertical)
+subwin_u_coords = getindex.(subwincorners,2)[1,:] # vector of subwindow u pixel coordinates (horizontal)
+subwin_diag_u_inds = zeros(length(subwin_v_coords))
+subwin_diag_u_inds[1] = findfirst(subwin_u_coords .>= us_transect_start_u) # index in of first subwindow located >= from transect start at top of image
+
+ # find u coordinate for each subwindow along diagonal to have one subwindow in each row of v
+ subwin_diag_u = subwin_u_coords[Int(subwin_diag_u_inds[1])] # find starting u coordinate
+
+for i = 2:length(subwin_v_coords) # for every row in v 
+    subwin_diag_u = subwin_diag_u + N/us_shadow_ror # from previous u coordinate, go 
+    subwin_diag_u_inds[i] = findfirst(subwin_u_coords .>= subwin_diag_u)
+end
+
+subwin_diag_v_inds = vec(1:length(subwin_v_coords))
+
+# Create mask to isolate indices of subwindows of interest
+subwin_mask = zeros(size(subwincorners))
+replace!(subwin_mask, 0=>NaN)
+
+for u = 1:size(subwin_mask,2)
+    for v = 1:size(subwin_mask,1)
+        u_ind = subwin_diag_u_inds[v] # 15
+        v_ind = subwin_diag_v_inds[v]
+        if u == u_ind && v == v_ind # find subwindow indices in 2d arrays
+            subwin_mask[v,u] = 1
+        else
+        end
+    end
+end
+
+# Create empty vectors for loop analysis
+gate_width_us = (97*2+89)/12*ft_to_m # m, 2 97' gates & 1 89" gate on us side
+Q_est_vec_us = fill(NaN, Nfiles)
+ts_inds_us = fill(NaN, Nfiles)
+img_edge_xy = [0.0 0.0]
+Q_op_vec_us = Any[]# Save Q est for each operation
+
+fi = 1
+filenum = fi + 3348
+FLIR_filename = joinpath("/Volumes/OWC_NVMe_4TB/CNRD_IR/Rec-DeFreesLab_-00" * string.(filenum) * ".ats")
+ats_year = 2022
+@assert isfile(FLIR_filename)
+I1images = LoadATSImageSequence(FLIR_filename, I1inds, ats_year)
+I2images = LoadATSImageSequence(FLIR_filename, I2inds, ats_year)
+
+# Remove image pairs when at least one image took place during NUC (calibration)
+# mode:
+if any(isnuc(I1images.Headers)) || any(isnuc(I2images.Headers))
+    nuc_frames = isnuc(I1images.Headers) .| isnuc(I2images.Headers)
+    I1inds = I1inds[.!( isnuc(I1images.Headers) .| isnuc(I2images.Headers) )]
+    I2inds = I2inds[.!( isnuc(I1images.Headers) .| isnuc(I2images.Headers) )]
+    I1images = LoadATSImageSequence(FLIR_filename, I1inds, ats_year)
+    I2images = LoadATSImageSequence(FLIR_filename, I2inds, ats_year)
+end
+
+# Initialize MQD calculation:
+MQD_variables = initialize_MQD(I1images,
+                            I2images,
+                            subwincorners,
+                            N, M,
+                            rhoI, rhoJ)                              
+
+# Perform the MQD analysis:
+subpix_shifts_i, subpix_shifts_j, performance_message = perform_MQD(
+    I1images, I2images, subwincorners, MQD_variables)
+#, MQD_parameters);
+
+# Find WSE for displacement calculation
+ATS_file_time = extrema(IRQIV.ats_ts(I1images))
+therminds = find_nearest_time_indices(IRQIV.ats_ts(I1images), therm.DateTime)
+WSE_mean_ATS = χcalculated_us.z_c - mean(therm.WaterDistanceFromCameraM[therminds])
+
+# Upstream georectification
+displacement_x, displacement_y, centroid_x_origin, centroid_y_origin = pixel2physical_displacements(subwincorners, 
+                                                                                                    subpix_shifts_i, 
+                                                                                                    subpix_shifts_j, 
+                                                                                                    M, N, 
+                                                                                                    WSE_mean_ATS,
+                                                                                                    dlt_us)
+
+# Create time vector from each ATS file metadata
+dt_vec = (IRQIV.ats_ts(I2images) .- IRQIV.ats_ts(I1images)) # ats_ts = timestamp, should give consistent dt
+dt_vec = [Dates.value(x) for x in dt_vec]
+dt = mean(dt_vec) / 1000 # convert ms to s 
+
+## NEW
+displacement_x_masked = displacement_x .* subwin_mask
+displacement_y_masked = displacement_y .* subwin_mask
+inst_vel = hypot.(displacement_x_masked, displacement_y_masked)
+inst_vel_alpha = atan.(displacement_y_masked./displacement_x_masked)
+inst_vel_field_normal = inst_vel .* cos.(inst_vel_alpha .- us_shadow_theta)
+inst_vel_normal = dropdims(NaNStatistics.nanmean(inst_vel_field_normal, dims = (1,2)), dims = (1,2))
+
+opstart = fi*nImagePairs-nImagePairs+1
+opend = fi*nImagePairs
+inst_Q = (inst_vel_normal * 0.85 * gate_width_us) .* therm.PressureM[therminds]
+append!(Q_op_vec_us, inst_Q)
+# Q_op_vec_us[opstart:opend,2] = therm.DateTime[therminds]
+
+img_edge_xy[1] = centroid_x_origin[end,1] - centroid_x_origin[end,end] # Distance between physical locations of bottom l/r subwindows (bottom edge b/w abutments)
+img_edge_xy[2] = centroid_y_origin[end,1] - centroid_y_origin[end,end] # "
+
+#ts_ind = Int(round(length(IRQIV.ats_ts(I1images))/2))
+
+# Testing UTM coordinates
+UTM_us_S = [411771, 4642684]
+UTM_us_N = [411766, 4642694]
+
+ground_UTM_width = hypot(UTM_us_S[2]-UTM_us_N[2], UTM_us_S[1]-UTM_us_N[1]) # Hypotnuse between two rock abutments on either side of image
+reproj_UTM_width = hypot(img_edge_xy[1], img_edge_xy[2]) # Distanc
+
+
+
+# plt.close("all")
+# fig,axs = plt.subplots()
+# q = axs.quiver(centroid_x_origin, centroid_y_origin, displacement_x_mean, displacement_y_mean, angles="xy")
+# S = axs.scatter(UTM_us_S[1], UTM_us_S[2])
+# No = axs.scatter(UTM_us_N[1], UTM_us_N[2])
+# cam = axs.scatter(χcalculated_us.x_c, χcalculated_us.y_c)
+# plt.show()
