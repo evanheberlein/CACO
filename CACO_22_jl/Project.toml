@@ -1,6 +1,8 @@
 [deps]
+DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 Dierckx = "39dd38d3-220a-591b-8e3c-4c3a8c710a94"
 FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
 IRQIV = "b34e0899-2416-4e9c-94cb-1752f893de1e"
 Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+TextParse = "e0df1984-e451-5cb5-8b61-797a481e67e3"
